@@ -190,10 +190,13 @@ function place(){
   const d = dir > 0 ? dist : cur.len - dist;
   at(cur, d, P, Tn); if (dir < 0) Tn.negate();
   car.position.copy(P);
-  const target = Math.atan2(-Tn.z, Tn.x);
-  let diff = target - yaw.v; diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-  yaw.v += diff * .25; car.rotation.y = yaw.v;
+  // follow the road in 3D: smoothed forward vector -> yaw AND pitch (uphill / downhill)
+  fwd.lerp(Tn, .2).normalize();
+  const right = _r.crossVectors(fwd, UP).normalize();      // local +Z
+  const up = _u.crossVectors(right, fwd).normalize();      // local +Y
+  car.quaternion.setFromRotationMatrix(_m.makeBasis(fwd, up, right));
 }
+const UP = new THREE.Vector3(0,1,0), fwd = new THREE.Vector3(1,0,0), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _m = new THREE.Matrix4();
 
 // ---------- camera ----------
 const home = {pos:new THREE.Vector3(cxm + 240, 430, czm + 560), target:new THREE.Vector3(cxm, 0, czm)};
