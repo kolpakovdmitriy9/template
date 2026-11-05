@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3D-карта</title>
+<style>
+  :root{--bg:#dfe7ee;--panel:rgba(255,255,255,.88);--ink:#1c2630;--accent:#2563eb}
+  @media (prefers-color-scheme:dark){:root{--bg:#10161d;--panel:rgba(24,32,42,.88);--ink:#e8eef5;--accent:#60a5fa}}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,sans-serif;overflow:hidden}
+  #scene{position:fixed;inset:0}
+  canvas{display:block;touch-action:none}
+  .panel{position:fixed;left:16px;bottom:16px;right:16px;max-width:360px;background:var(--panel);backdrop-filter:blur(8px);
+    border-radius:12px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;box-shadow:0 4px 18px rgba(0,0,0,.18)}
+  button{font:inherit;color:inherit;background:transparent;border:1px solid currentColor;border-radius:8px;padding:6px 12px;cursor:pointer}
+  button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+  label{display:flex;align-items:center;gap:8px}
+  input[type=range]{width:110px;accent-color:var(--accent)}
+  #status{position:fixed;top:16px;left:16px;right:16px;background:var(--panel);padding:8px 12px;border-radius:10px;display:inline-block;max-width:420px}
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div id="status">Загрузка карты…</div>
+<div class="panel">
+  <button id="follow" aria-pressed="false">Следить за машиной</button>
+  <button id="reset">Сбросить вид</button>
+  <label>Скорость <input id="speed" type="range" min="0" max="40" value="14"></label>
+</div>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
