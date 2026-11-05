@@ -14,7 +14,7 @@ export const PAL = {              // light "paper-model" palette
  * Builds the whole 3D world (map + car + fixed route + driving logic) into `scene`.
  * Returns {car, route, bounds, sun, update(dt, speed), ...}. No renderer / camera / UI in here.
  */
-export async function buildWorld({scene, data, carUrl = './models/car.glb', routePre = [[446,-339],[434,-338]], shadowSize = 2048}){
+export async function buildWorld({scene, data, carUrl = new URL('./models/car.glb', import.meta.url).href, routePre = [[446,-339],[434,-338]], shadowSize = 2048}){
 scene.add(new THREE.HemisphereLight(0xffffff, 0xdfe3e6, 1.5));
 const hemi = scene.children[scene.children.length - 1];
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);

@@ -29,7 +29,7 @@ renderer.autoClear = false; renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();            // transparent: the page shows through
-const data = await (await fetch('./data/scene.json')).json();
+const data = await (await fetch(new URL('./data/scene.json', import.meta.url))).json();
 const world = await buildWorld({scene, data, routePre:[[ROUTE_X0, -340], [446, -339], [434, -338]]});
 const {car, bounds} = world;
 // car + its lights live on layer 1 (drawn unclipped); the map on layer 0 (drawn only inside the rectangle)
