@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Опыт работы — портфолио</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#0b0b0b;--grey:#9b9b9b;--page:#ffffff;--map:#f4f7f9;--accent:#ffc800}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--page);color:var(--ink);font:16px/1.4 Inter,system-ui,sans-serif}
+  .page{max-width:1120px;margin:0 auto;padding:72px 16px 240px;position:relative}
+  .logos{display:flex;justify-content:center;align-items:center}
+  .logo{width:164px;height:164px;border-radius:50%;display:grid;place-items:center;margin:0 -8px;font:700 22px/1 Inter,sans-serif;color:#fff;text-align:center}
+  .logo.a{background:#111}.logo.b{background:#e53a2f}.logo.c{background:linear-gradient(135deg,#cfd6dc,#7d8892);border:3px solid #fff;outline:2px solid #111;outline-offset:-2px}
+  h1{font:400 clamp(56px,10vw,104px)/.95 Anton,Impact,'Arial Narrow',sans-serif;letter-spacing:-.01em;text-align:center;margin:72px 0 12px;text-transform:uppercase}
+  .sub{text-align:center;font-size:22px;margin:0 0 56px}
+  .stage{display:grid;grid-template-columns:1fr 369px 1fr;gap:24px;align-items:stretch}
+  .tag{align-self:start;justify-self:start;font-size:11px;letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;background:#f1f1f1;border-radius:8px;margin-top:30px}
+  /* the rectangle that hosts the scene (the map is clipped to it) */
+  #map-rect{width:369px;height:635px;background:var(--map);position:relative}
+  .side{display:flex;flex-direction:column;justify-content:space-between;min-height:635px}
+  .pill{display:inline-flex;align-items:center;gap:0}
+  .pill i{display:grid;place-items:center;width:54px;height:38px;border-radius:19px;background:#000;color:#fff;font-style:normal}
+  .pill b{font:500 18px/1 Inter;padding:9px 14px;border:1px solid #000;border-radius:19px;margin-left:-14px;background:#fff}
+  .side h3{font:500 36px/1 Inter;color:var(--grey);margin:18px 0}
+  .big{font:400 clamp(52px,7vw,84px)/.92 Anton,Impact,'Arial Narrow',sans-serif;text-transform:uppercase;margin:0 0 14px}
+  .cap{font-size:13px;margin:0}.cap span{color:var(--grey)}
+  #map-overlay{position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:20}
+  .more{margin-top:160px;text-align:center;color:var(--grey)}
+  @media (max-width:960px){
+    .stage{grid-template-columns:1fr;justify-items:center;gap:20px}
+    .tag{justify-self:center;margin:0}
+    #map-rect{width:min(369px,calc(100vw - 32px));height:calc(min(369px,100vw - 32px) * 635 / 369)}
+    .side{min-height:0;width:min(369px,calc(100vw - 32px))}
+    .big{margin-top:24px}
+  }
+</style>
+</head>
+<body>
+<canvas id="map-overlay"></canvas>
+<main class="page">
+  <div class="logos" aria-hidden="true"><div class="logo a">ЛОГО</div><div class="logo b">ЛОГО</div><div class="logo c">ФОТО</div></div>
+  <h1>Опыт работы</h1>
+  <p class="sub">рассказываю и показываю</p>
+
+  <section class="stage">
+    <div class="tag">● Начало</div>
+    <div id="map-rect" role="img" aria-label="Карта города, вид сверху: машина выезжает на дорогу и камера отдаляется"></div>
+    <div class="side">
+      <div>
+        <div class="pill"><i>🛒</i><b>2014</b></div>
+        <h3>Текст</h3>
+      </div>
+      <div>
+        <h2 class="big">Хакатон</h2>
+        <p class="cap">проработанных экранов, <span>закрывающих задачи бизнеса<br>и ускоряющих путь пользователя</span></p>
+      </div>
+    </div>
+  </section>
+
+  <p class="more">Дальше по странице…</p>
+</main>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module" src="./portfolio.js"></script>
+</body>
+</html>
