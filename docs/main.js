@@ -126,12 +126,12 @@ async function loadCar(){
 const data = await (await fetch('./data/scene.json')).json();
 const b = data.bounds, cxm = (b.min[0]+b.max[0])/2, czm = (b.min[2]+b.max[2])/2;
 
-addMesh(data.terrain, new THREE.MeshStandardMaterial({vertexColors:true, side, roughness:1,
+const terrainMesh = addMesh(data.terrain, new THREE.MeshStandardMaterial({vertexColors:true, side, roughness:1,
   polygonOffset:true, polygonOffsetFactor:2, polygonOffsetUnits:2}),
   {colorFn: y => { const t = Math.min(Math.max(y/17, 0), 1); return [.55+.2*t, .66+.05*t, .45+.2*t]; }});
 addMesh(data.green, new THREE.MeshStandardMaterial({color:0x6aa361, side, roughness:1}), {y:.12});
 addMesh(data.water, new THREE.MeshStandardMaterial({color:0x4a90c2, side, roughness:.2, metalness:.2}), {y:.15});
-addMesh(data.roads, new THREE.MeshStandardMaterial({color:0x3a3f45, side, roughness:.9}), {y:.2});
+const roadsMesh = addMesh(data.roads, new THREE.MeshStandardMaterial({color:0x3a3f45, side, roughness:.9}), {y:.2});
 addMesh(data.buildings, new THREE.MeshStandardMaterial({color:0xece6dc, side, roughness:.8}), {cast:true});
 
 // trees (instanced)
@@ -148,8 +148,18 @@ addMesh(data.buildings, new THREE.MeshStandardMaterial({color:0xece6dc, side, ro
 }
 
 // ---------- road network & driving ----------
-const roadW = data.roadGraph.width;
-const edges = data.roadGraph.edges.map(e => {
+// Only real carriageways: axes whose road surface is >= MIN_W metres wide
+// (7+ m = main avenue; 3-3.6 m = lanes/driveways; ~2 m = footpaths and sidewalks). Try 3 to include the side lanes.
+const MIN_W = 6;
+const wide = data.roadGraph.edges.filter(e => e.w >= MIN_W);
+const par = new Map(); const find = x => { while ((par.get(x) ?? x) !== x) x = par.get(x); return x; };
+wide.forEach(e => { par.set(find(e.a), find(e.b)); });
+const lenOf = e => e.pts.reduce((t, p, i) => i ? t + Math.hypot(p[0]-e.pts[i-1][0], p[2]-e.pts[i-1][2]) : 0, 0);
+const sums = new Map(); wide.forEach(e => sums.set(find(e.a), (sums.get(find(e.a)) || 0) + lenOf(e)));
+const mainRoot = [...sums.entries()].sort((a, b) => b[1] - a[1])[0][0];
+const net = wide.filter(e => find(e.a) === mainRoot);
+const roadW = Math.min(...net.map(e => e.w));
+const edges = net.map(e => {
   const pts = e.pts.map(p => new THREE.Vector3(p[0], p[1] + .2, p[2]));
   const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i-1] + pts[i].distanceTo(pts[i-1]));
   return {a:e.a, b:e.b, pts, cum, len:cum[cum.length-1]};
@@ -171,6 +181,7 @@ scene.add(car);
 const beacon = new THREE.Mesh(new THREE.ConeGeometry(3, 9, 12).rotateX(Math.PI),
   new THREE.MeshBasicMaterial({color:0xff2d55, fog:false, depthTest:false, transparent:true, opacity:.9}));
 beacon.renderOrder = 10; scene.add(beacon);
+scene.updateMatrixWorld(true);
 console.log(`road width ${roadW.toFixed(2)} m, car scale ${carScale.toFixed(2)} -> ${(4.5*carScale).toFixed(2)} x ${(1.85*carScale).toFixed(2)} m`);
 
 let cur = edges.reduce((a, e) => e.len > a.len ? e : a), dir = 1, dist = 0, last = -1;
@@ -186,17 +197,37 @@ function step(dt, speed){
     else { dir = nxt.a === node ? 1 : -1; cur = nxt; }
   }
 }
+// Ride the surface: sample the road (else terrain) under the four wheels, fit a plane -> pitch AND roll.
+const ray = new THREE.Raycaster(), DOWN = new THREE.Vector3(0,-1,0), _o = new THREE.Vector3();
+const UP = new THREE.Vector3(0,1,0), fwd = new THREE.Vector3(1,0,0), lat = new THREE.Vector3(0,0,1);
+const upS = new THREE.Vector3(0,1,0), _m = new THREE.Matrix4();
+const wheel = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];  // FL FR RL RR
+function groundY(x, z, fallback){
+  ray.set(_o.set(x, fallback + 6, z), DOWN);
+  const h = ray.intersectObject(roadsMesh, false)[0] || ray.intersectObject(terrainMesh, false)[0];
+  return h ? h.point.y : fallback;
+}
 function place(){
   const d = dir > 0 ? dist : cur.len - dist;
   at(cur, d, P, Tn); if (dir < 0) Tn.negate();
-  car.position.copy(P);
-  // follow the road in 3D: smoothed forward vector -> yaw AND pitch (uphill / downhill)
-  fwd.lerp(Tn, .2).normalize();
-  const right = _r.crossVectors(fwd, UP).normalize();      // local +Z
-  const up = _u.crossVectors(right, fwd).normalize();      // local +Y
-  car.quaternion.setFromRotationMatrix(_m.makeBasis(fwd, up, right));
+  // heading from the road (horizontal part only), smoothed
+  const hx = Tn.x, hz = Tn.z, hl = Math.hypot(hx, hz) || 1;
+  fwd.x += (hx/hl - fwd.x) * .2; fwd.z += (hz/hl - fwd.z) * .2; fwd.y = 0; fwd.normalize();
+  lat.crossVectors(fwd, UP).normalize();
+  const L = 1.4 * carScale, W = .9 * carScale;
+  [[L,-W],[L,W],[-L,-W],[-L,W]].forEach(([l, w], i) => {
+    const x = P.x + fwd.x*l + lat.x*w, z = P.z + fwd.z*l + lat.z*w;
+    wheel[i].set(x, groundY(x, z, P.y), z);
+  });
+  const f = wheel[0].clone().add(wheel[1]).sub(wheel[2]).sub(wheel[3]);   // rear -> front
+  const r = wheel[1].clone().add(wheel[3]).sub(wheel[0]).sub(wheel[2]);   // left -> right
+  const up = r.clone().cross(f).normalize();
+  upS.lerp(up, .25).normalize();
+  const fw = f.normalize().sub(upS.clone().multiplyScalar(f.dot(upS))).normalize();
+  const rt = fw.clone().cross(upS).normalize();
+  car.quaternion.setFromRotationMatrix(_m.makeBasis(fw, upS, rt));
+  car.position.set(P.x, (wheel[0].y + wheel[1].y + wheel[2].y + wheel[3].y) / 4, P.z);
 }
-const UP = new THREE.Vector3(0,1,0), fwd = new THREE.Vector3(1,0,0), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _m = new THREE.Matrix4();
 
 // ---------- camera ----------
 const home = {pos:new THREE.Vector3(cxm + 240, 430, czm + 560), target:new THREE.Vector3(cxm, 0, czm)};
@@ -215,6 +246,7 @@ status.textContent = 'Тяните мышью — вращение, колесо
 setTimeout(() => status.style.display = 'none', 6000);
 
 let prev = performance.now();
+window.__car = car;
 renderer.setAnimationLoop(now => {
   const dt = Math.min((now - prev)/1000, .1); prev = now;
   step(dt, +speedEl.value); place();

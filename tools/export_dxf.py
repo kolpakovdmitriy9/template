@@ -90,20 +90,19 @@ def node_id(p):
     for i, q in enumerate(nodes):
         if math.dist(p[:2], q[:2]) < 3.0: return i
     nodes.append(p); return len(nodes) - 1
+hatches = by["TPX_ROADS_HATCH"]
+assert len(hatches) == len(axes)
+def hatch_area(h):
+    V = np.array([tuple(v) for v in h.vertices]); t = 0.0
+    for f in h.faces:
+        i = [int(x) for x in f][:3]; p, q, r = V[i]; t += np.linalg.norm(np.cross(q - p, r - p)) / 2
+    return t
 edges = []
-for a in axes:
-    edges.append({"a": node_id(a[0]), "b": node_id(a[-1]), "pts": [tv(p) for p in a]})
-# keep the biggest connected component by length
-parent = list(range(len(nodes)))
-def f(x):
-    while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
-    return x
-for e in edges: parent[f(e["a"])] = f(e["b"])
-length = collections.Counter()
-for e in edges: length[f(e["a"])] += sum(math.dist(p, q) for p, q in zip(e["pts"], e["pts"][1:]))
-main = length.most_common(1)[0][0]
-edges = [e for e in edges if f(e["a"]) == main]
-print("road edges in main network:", len(edges), "of", len(axes), "length %.0f m" % length[main])
+for a, h in zip(axes, hatches):
+    L = sum(math.dist(p[:2], q[:2]) for p, q in zip(a, a[1:]))
+    w = hatch_area(h) / L if L > 1 else 0
+    edges.append({"a": node_id(a[0]), "b": node_id(a[-1]), "w": round(w, 1), "pts": [tv(p) for p in a]})
+print("edge widths (m):", sorted({e["w"] for e in edges}, reverse=True)[:8], "...")
 out["roadGraph"] = {"width": round(road_w, 2), "edges": edges}
 
 # bounds
