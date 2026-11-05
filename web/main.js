@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {STLLoader} from 'three/addons/loaders/STLLoader.js';
 
 const status = document.getElementById('status');
 const host = document.getElementById('scene');
@@ -58,7 +59,23 @@ function procCar(){
   g.traverse(o => o.castShadow = true);
   return g;          // forward = +X, length 4.5, width 1.85
 }
+// parametric-model.stl: Z-up, length along X, 184 x 90 x 62 units. CAR_FLIP turns it 180deg if it drives backwards.
+const CAR_FLIP = true;
+async function loadStlCar(){
+  const g = await new STLLoader().loadAsync('./models/car.stl');
+  g.rotateX(-Math.PI/2);                       // Z-up -> Y-up
+  g.computeBoundingBox(); const bb = g.boundingBox, c = bb.getCenter(new THREE.Vector3()), s = bb.getSize(new THREE.Vector3());
+  g.translate(-c.x, -bb.min.y, -c.z);
+  if (CAR_FLIP) g.rotateY(Math.PI);
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({color:0xd7263d, roughness:.4, metalness:.3, side:THREE.DoubleSide}));
+  mesh.castShadow = true;
+  const wrap = new THREE.Group(); wrap.add(mesh);
+  wrap.scale.setScalar(4.5 / s.x);              // real-world length; fitted to the road later
+  const out = new THREE.Group(); out.add(wrap); out.userData.width = s.z * 4.5 / s.x; return out;
+}
 async function loadCar(){
+  try{ return await loadStlCar(); }catch(e){ console.warn('car.stl not loaded', e); }
   for (const url of ['./models/car.glb', './models/car.gltf']){
     try{
       const gltf = await new GLTFLoader().loadAsync(url);
@@ -118,7 +135,7 @@ const at = (E, d, out, tan) => {
 
 const car = await loadCar();
 // scale the car to the road: width ~55% of the road width (real car = 1.85 m wide)
-const carScale = Math.min(1, (roadW * .55) / 1.85);
+const carScale = Math.min(1, (roadW * .55) / (car.userData.width || 1.85));
 car.scale.setScalar(carScale);
 scene.add(car);
 // beacon so the (road-scale) car stays findable from the overview
