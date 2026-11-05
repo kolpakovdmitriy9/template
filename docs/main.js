@@ -102,7 +102,43 @@ async function loadObjCar(){
   wrap.scale.setScalar(4.5 / s.x);             // real-world length; fitted to the road later
   const out = new THREE.Group(); out.add(wrap); out.userData.width = s.z * 4.5 / s.x; return out;
 }
+// Tesla_Cybertruck.blend -> car.glb. Parts are painted by mesh name (the .blend only had grey placeholders).
+const PAINT_GLB = [
+  [/car_paint/i,     new THREE.MeshStandardMaterial({color:YELLOW, roughness:.3, metalness:.35})],
+  [/glass_windows/i, new THREE.MeshStandardMaterial({color:0x10181f, roughness:.05, metalness:.8, transparent:true, opacity:.88})],
+  [/glass_light/i,   new THREE.MeshStandardMaterial({color:0xdfe9f2, roughness:.1, metalness:.2, transparent:true, opacity:.55})],
+  [/^light/i,        new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xdfeaff, emissiveIntensity:.9})],
+  [/wheel/i,         new THREE.MeshStandardMaterial({color:0x141414, roughness:.8, metalness:.2})],
+  [/interior/i,      new THREE.MeshStandardMaterial({color:0x1b1b1d, roughness:.8})],
+  [/trunk/i,         new THREE.MeshStandardMaterial({color:0x2a2c2f, roughness:.6, metalness:.3})],
+  [/body/i,          new THREE.MeshStandardMaterial({color:0xb9bec5, roughness:.35, metalness:.85})],   // steel frame
+];
+async function loadGlbCar(){
+  const gltf = await new GLTFLoader().loadAsync('./models/car.glb');
+  const m = gltf.scene; m.updateMatrixWorld(true);
+  m.traverse(o => { if (!o.isMesh) return;
+    const hit = PAINT_GLB.find(([re]) => re.test(o.name));
+    if (hit) o.material = hit[1]; o.castShadow = true; });
+  // heading: back wheels -> front wheels becomes +X
+  const wp = n => { const o = m.getObjectByName(n); return o ? new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()) : null; };
+  const fl = wp('wheel_FL'), bl = wp('wheel_BL'), fr = wp('wheel_FR'), br = wp('wheel_BR');
+  if (fl && bl && fr && br){
+    const f = fl.clone().add(fr).sub(bl).sub(br); f.y = 0;
+    m.rotation.y = Math.atan2(f.z, f.x);          // rotate about Y so f points to +X
+    m.updateMatrixWorld(true);
+  }
+  const box = new THREE.Box3().setFromObject(m), s = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const root = new THREE.Group(); root.add(m);
+  m.position.set(-c.x, -box.min.y, -c.z);       // m.position applied after rotation: recentre in world axes
+  m.updateMatrixWorld(true);
+  const wrap = new THREE.Group(); wrap.add(root);
+  const out = new THREE.Group(); out.add(wrap); out.userData.width = s.z;   // native metres (~6 m long)
+  if (fl && bl && fr && br) out.userData.half = [fl.distanceTo(bl) / 2, fl.distanceTo(fr) / 2];   // half wheelbase, half track
+  console.log('cybertruck size', s.toArray().map(v => +v.toFixed(2)));
+  return out;
+}
 async function loadCar(){
+  try{ return await loadGlbCar(); }catch(e){ console.warn('car.glb not loaded', e); }
   try{ return await loadObjCar(); }catch(e){ console.warn('car.obj not loaded', e); }
   try{ return await loadStlCar(); }catch(e){ console.warn('car.stl not loaded', e); }
   for (const url of ['./models/car.glb', './models/car.gltf']){
@@ -182,7 +218,7 @@ const beacon = new THREE.Mesh(new THREE.ConeGeometry(3, 9, 12).rotateX(Math.PI),
   new THREE.MeshBasicMaterial({color:0xff2d55, fog:false, depthTest:false, transparent:true, opacity:.9}));
 beacon.renderOrder = 10; scene.add(beacon);
 scene.updateMatrixWorld(true);
-console.log(`road width ${roadW.toFixed(2)} m, car scale ${carScale.toFixed(2)} -> ${(4.5*carScale).toFixed(2)} x ${(1.85*carScale).toFixed(2)} m`);
+console.log(`road width ${roadW.toFixed(2)} m, car scale ${carScale.toFixed(2)} , car width ${((car.userData.width || 1.85)*carScale).toFixed(2)} m`);
 
 let cur = edges.reduce((a, e) => e.len > a.len ? e : a), dir = 1, dist = 0, last = -1;
 const P = new THREE.Vector3(), Tn = new THREE.Vector3(), yaw = {v:0};
@@ -214,7 +250,7 @@ function place(){
   const hx = Tn.x, hz = Tn.z, hl = Math.hypot(hx, hz) || 1;
   fwd.x += (hx/hl - fwd.x) * .2; fwd.z += (hz/hl - fwd.z) * .2; fwd.y = 0; fwd.normalize();
   lat.crossVectors(fwd, UP).normalize();
-  const L = 1.4 * carScale, W = .9 * carScale;
+  const [hl_, hw_] = car.userData.half || [1.4, .9], L = hl_ * carScale, W = hw_ * carScale;
   [[L,-W],[L,W],[-L,-W],[-L,W]].forEach(([l, w], i) => {
     const x = P.x + fwd.x*l + lat.x*w, z = P.z + fwd.z*l + lat.z*w;
     wheel[i].set(x, groundY(x, z, P.y), z);
