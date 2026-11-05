@@ -5,7 +5,6 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 // ---------------------------------------------------------------- settings
 const YELLOW    = 0xffc800;   // car paint
 const CAR_SCALE = 0.5;        // Cybertruck is ~6 m long; 0.5 -> ~3 m so it can turn / U-turn inside the road
-const MIN_W     = 6;          // drive only on roads >= this width (m): 7+ m avenues, bridges. 3 = also side lanes
 const STEER_MAX = 0.85;       // rad (~49 deg)
 const PAL = {                 // light "paper-model" palette
   bg: 0xf4f7f9, ground: 0xeeeeec, road: 0xd3d5d8, building: 0xf3f2f0, edge: 0xcfcfcc,
@@ -95,7 +94,7 @@ function glowTexture(){
   x.fillStyle = g; x.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
 }
 // The light meshes are shared by front and rear: split them by triangle position. Rear -> red glow + sprites.
-function makeRearLightsRed(m, fwd, centre){
+function makeRearLightsRed(m, fwd, centre, halfLen){
   const tex = glowTexture(), rear = [], jobs = [], sprites = [];
   let plight = null;
   m.traverse(o => { if (o.isMesh && /^(light|glass_light)/i.test(o.name) && o.geometry.index) jobs.push(o); });
@@ -105,7 +104,7 @@ function makeRearLightsRed(m, fwd, centre){
     for (let i = 0; i < idx.length; i += 3){
       C.set(0,0,0); for (let k = 0; k < 3; k++){ V[k].fromBufferAttribute(pos, idx[i+k]).applyMatrix4(o.matrixWorld); C.add(V[k]); }
       C.multiplyScalar(1/3);
-      const isRear = C.clone().sub(centre).dot(fwd) < 0;
+      const isRear = C.clone().sub(centre).dot(fwd) < -.6 * halfLen;     // only the very back of the car
       (isRear ? back : front).push(idx[i], idx[i+1], idx[i+2]);
       if (isRear) rear.push(C.clone());
     }
@@ -165,7 +164,7 @@ async function loadCar(){
     m.rotation.y = Math.atan2(f.z, f.x); m.updateMatrixWorld(true);
   }
   const box = new THREE.Box3().setFromObject(m), s = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
-  const rearLights = makeRearLightsRed(m, new THREE.Vector3(1,0,0), c);
+  const rearLights = makeRearLightsRed(m, new THREE.Vector3(1,0,0), c, s.x / 2);
   m.position.set(-c.x, -box.min.y, -c.z); m.updateMatrixWorld(true);
   const out = new THREE.Group(); out.add(m);
   out.userData = {width: s.z, wheels, rearLights, half: (fl && bl && fr) ? [fl.distanceTo(bl) / 2, fl.distanceTo(fr) / 2] : [1.9, .95]};
@@ -182,29 +181,43 @@ function setBrake(k){
 }
 
 // ---------------------------------------------------------------- road network
-const wide = data.roadGraph.edges.filter(e => e.w >= MIN_W);
-const edges = wide.map(e => {
-  const pts = e.pts.map(p => new THREE.Vector3(p[0], p[1] + .2, p[2]));
+// ---- fixed route (drawn by the user): start east of the wide avenue, west along the street, south along the long
+// street, then west again. Pieces are cut out of the road axes by their index in data.roadGraph.edges.
+const ROUTE = {
+  pre: [[446,-339],[434,-338]],                       // arrow start (east of the avenue)
+  legs: [[321,[421,-337],[249,-328]],                 // E-W street heading west
+         [265,[249,-328],[229,-70]],                  // long N-S street heading south
+         [237,[229,-70],[166,-66]]],                  // turn west at the second street
+};
+function cutEdge(E, p, q){                            // part of polyline E.pts between the points nearest to p and q
+  const nearest = pt => { let best = {d:1e9};
+    for (let i = 0; i < E.pts.length - 1; i++){
+      const a = E.pts[i], b = E.pts[i+1], dx = b[0]-a[0], dz = b[2]-a[2], L2 = dx*dx + dz*dz || 1e-9;
+      const t = Math.max(0, Math.min(1, ((pt[0]-a[0])*dx + (pt[1]-a[2])*dz) / L2));
+      const x = a[0] + dx*t, z = a[2] + dz*t, d = Math.hypot(pt[0]-x, pt[1]-z);
+      if (d < best.d) best = {d, i, t, p:[x, a[1] + (b[1]-a[1])*t, z]}; }
+    return best; };
+  const A = nearest(p), B = nearest(q), fwdDir = (A.i + A.t) <= (B.i + B.t);
+  const out = [A.p];
+  if (fwdDir){ for (let i = A.i + 1; i <= B.i; i++) out.push(E.pts[i]); }
+  else      { for (let i = A.i; i > B.i; i--) out.push(E.pts[i]); }
+  out.push(B.p); return out;
+}
+const routePts = []; let routeW = 99;
+{
+  const E = data.roadGraph.edges;
+  ROUTE.legs.forEach(([i, p, q]) => { routeW = Math.min(routeW, E[i].w); cutEdge(E[i], p, q).forEach(pt => {
+    const last = routePts[routePts.length-1]; if (!last || Math.hypot(last[0]-pt[0], last[2]-pt[2]) > .05) routePts.push(pt); }); });
+  const y0 = routePts[0][1]; ROUTE.pre.slice().reverse().forEach(([x, z]) => routePts.unshift([x, y0, z]));
+}
+const route = (() => {
+  const pts = routePts.map(p => new THREE.Vector3(p[0], p[1] + .2, p[2]));
   const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i-1] + pts[i].distanceTo(pts[i-1]));
-  return {a:e.a, b:e.b, w:e.w, br:e.br || 0, bp:e.bp, pts, cum, len:cum[cum.length-1]};
-});
-const LINK = 14;      // m: road ends closer than this are joined by a short straight link
-edges.forEach(e => { e.ends = [e.pts[0], e.pts[e.pts.length-1]]; });
-function neighbours(e, endIdx){        // endIdx 1 = leaving through the far end (dir +1), 0 = through the start (dir -1)
-  const p = e.ends[endIdx], out = [];
-  edges.forEach(o => { if (o === e) return;
-    [0,1].forEach(k => { const g = Math.hypot(o.ends[k].x - p.x, o.ends[k].z - p.z); if (g < LINK) out.push({edge:o, dir:k === 0 ? 1 : -1, gap:g}); }); });
-  return out;
-}
-// largest connected component with these links
-{ const id = new Map(edges.map((e, i) => [e, i])), pr = edges.map((_, i) => i);
-  const fnd = x => { while (pr[x] !== x) x = pr[x]; return x; };
-  edges.forEach(e => [0,1].forEach(k => neighbours(e, k).forEach(n => { pr[fnd(id.get(e))] = fnd(id.get(n.edge)); })));
-  const tot = new Map(); edges.forEach((e, i) => tot.set(fnd(i), (tot.get(fnd(i)) || 0) + e.len));
-  const best = [...tot.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  for (let i = edges.length - 1; i >= 0; i--) if (fnd(i) !== best) edges.splice(i, 1);
-}
-console.log(`drive network: ${edges.length} roads, ${edges.reduce((t, e) => t + e.len, 0).toFixed(0)} m`);
+  return {w:routeW, pts, cum, len:cum[cum.length-1], ends:[pts[0], pts[pts.length-1]]};
+})();
+const edges = [route];
+const neighbours = () => [];            // both ends are dead ends: the car U-turns and drives the route back and forth
+console.log(`route: ${route.len.toFixed(0)} m, road ${route.w} m wide, ${route.pts.length} points`);
 const at = (E, d, out, tan) => {
   d = Math.min(Math.max(d, 0), E.len);
   let i = 1; while (i < E.cum.length-1 && E.cum[i] < d) i++;
@@ -213,7 +226,14 @@ const at = (E, d, out, tan) => {
   tan.subVectors(E.pts[i], E.pts[i-1]).normalize();
 };
 // invisible ray-cast surface = the drivable road hatches (bridges included), terrain as fallback
-const driveMesh = new THREE.Mesh(geom(data.roadsDrive.idx.length ? data.roadsDrive : data.roads));
+const driveMesh = (() => {
+  const bb = new THREE.Box3().setFromPoints(route.pts).expandByScalar(30), pos = data.roads.pos, src = data.roads.idx, idx = [];
+  for (let i = 0; i < src.length; i += 3){
+    const x = (pos[src[i]*3] + pos[src[i+1]*3] + pos[src[i+2]*3]) / 3, z = (pos[src[i]*3+2] + pos[src[i+1]*3+2] + pos[src[i+2]*3+2]) / 3;
+    if (x > bb.min.x && x < bb.max.x && z > bb.min.z && z < bb.max.z) idx.push(src[i], src[i+1], src[i+2]);
+  }
+  return new THREE.Mesh(geom({pos, idx}));
+})();
 driveMesh.position.y = .2; driveMesh.updateMatrixWorld(true);
 terrainMesh.updateMatrixWorld(true);
 
@@ -256,7 +276,7 @@ function advance(ds){
     const opts = neighbours(cur, endIdx);
     if (!opts.length){                                  // dead end -> U-turn
       const d = dir > 0 ? cur.len : 0; at(cur, d, P, Tn); if (dir < 0) Tn.negate();
-      uturn = {phi:0, r:Math.max(offS, 1), c:P.clone(), td:Tn.clone().setY(0).normalize()};
+      uturn = {phi:0, r:Math.max(offS, 1.6), c:P.clone(), td:Tn.clone().setY(0).normalize()};
       uturn.right = new THREE.Vector3(uturn.td.z * -1, 0, uturn.td.x).normalize();
       uturn.right.crossVectors(uturn.td, UP).normalize();
       dist = 0; return;
@@ -286,7 +306,7 @@ function place(dt, ds){
   fwd.lerp(target.normalize(), k).setY(0).normalize();
   lat.crossVectors(fwd, UP).normalize();
   if (!uturn){                                          // keep to the right lane
-    offS += (Math.min(Math.max(cur.w * .25, 1), 2.2) - offS) * (1 - Math.exp(-dt * 3));
+    offS += (Math.min(Math.max(cur.w * .25, .45), 2.2) - offS) * (1 - Math.exp(-dt * 3));
     P.addScaledVector(lat, offS);
   }
   // steering from the heading change per metre driven
@@ -328,7 +348,7 @@ status.textContent = 'Тяните мышью — вращение, колесо
 setTimeout(() => status.style.display = 'none', 6000);
 
 // debug / test hooks
-window.__cam = {camera, controls}; window.__car = car; window.__edges = edges; window.__bridges = data.roadGraph.edges.map((e, i) => e.br > 3 && e.w >= MIN_W ? e.pts[Math.floor(e.pts.length/2)] : null).filter(Boolean);
+window.__cam = {camera, controls}; window.__car = car; window.__edges = edges;
 window.__neighbours = neighbours; window.__speed = () => v; window.__setSpeed = x => { v = x; }; window.__steer = () => steerS; window.__goto = (i, d, dr = 1) => { cur = edges[i]; dir = dr; dist = d; uturn = null; };
 
 let prevT = performance.now(), v = 0, brakeHold = 0, brakeK = 0;
