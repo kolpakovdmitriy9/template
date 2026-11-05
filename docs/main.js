@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {OBJLoader} from 'three/addons/loaders/OBJLoader.js';
 import {STLLoader} from 'three/addons/loaders/STLLoader.js';
 
 const status = document.getElementById('status');
@@ -74,7 +75,35 @@ async function loadStlCar(){
   wrap.scale.setScalar(4.5 / s.x);              // real-world length; fitted to the road later
   const out = new THREE.Group(); out.add(wrap); out.userData.width = s.z * 4.5 / s.x; return out;
 }
+// toycar1.obj: Y-up, forward = +X, ~4.77 x 2.54 x 2.63. Parts are painted by name (the .mtl was not provided).
+const YELLOW = 0xffc800;
+const PAINT = [   // [name regex, material]
+  [/glass/i,        new THREE.MeshStandardMaterial({color:0x1b2733, roughness:.05, metalness:.7, transparent:true, opacity:.85, side:THREE.DoubleSide})],
+  [/tyre/i,         new THREE.MeshStandardMaterial({color:0x151515, roughness:.9})],
+  [/rim/i,          new THREE.MeshStandardMaterial({color:0xc9ced4, roughness:.3, metalness:.9})],
+  [/chrome/i,       new THREE.MeshStandardMaterial({color:0xb8bcc2, roughness:.2, metalness:1})],
+  [/signal_light/i, new THREE.MeshStandardMaterial({color:0xff9d00, emissive:0xff6a00, emissiveIntensity:.5})],
+  [/brake_light/i,  new THREE.MeshStandardMaterial({color:0xd01020, emissive:0xaa0010, emissiveIntensity:.6})],
+  [/riverce_light/i,new THREE.MeshStandardMaterial({color:0xf2f2f2})],
+  [/Sphere.*Light/i,new THREE.MeshStandardMaterial({color:0xfff6d0, emissive:0xfff0b0, emissiveIntensity:.8})],
+  [/num_plate/i,    new THREE.MeshStandardMaterial({color:0xf5f5f5})],
+  [/bumper|Body_/i, new THREE.MeshStandardMaterial({color:YELLOW, roughness:.35, metalness:.25, side:THREE.DoubleSide})],
+  [/./,             new THREE.MeshStandardMaterial({color:0x2a2d31, roughness:.7})],   // light housings etc.
+];
+async function loadObjCar(){
+  const obj = await new OBJLoader().loadAsync('./models/car.obj');
+  obj.traverse(o => { if (!o.isMesh) return;
+    const name = `${o.name} ${o.material?.name || ''}`;
+    o.material = PAINT.find(([re]) => re.test(name))[1];
+    o.castShadow = true; });
+  let box = new THREE.Box3().setFromObject(obj), s = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  obj.position.set(-c.x, -box.min.y, -c.z);
+  const wrap = new THREE.Group(); wrap.add(obj);
+  wrap.scale.setScalar(4.5 / s.x);             // real-world length; fitted to the road later
+  const out = new THREE.Group(); out.add(wrap); out.userData.width = s.z * 4.5 / s.x; return out;
+}
 async function loadCar(){
+  try{ return await loadObjCar(); }catch(e){ console.warn('car.obj not loaded', e); }
   try{ return await loadStlCar(); }catch(e){ console.warn('car.stl not loaded', e); }
   for (const url of ['./models/car.glb', './models/car.gltf']){
     try{
