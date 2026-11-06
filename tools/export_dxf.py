@@ -154,6 +154,18 @@ except ImportError:
 edges = [e for e in edges if e["w"] >= 2.5]
 out["roadGraph"] = {"width": round(road_w, 2), "edges": edges}
 
+# road markings (flat world only): zebra crossings, turn arrows, dashed centre lines - see tools/markings.py
+if FLAT:
+    import os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    import markings
+    from shapely.geometry import Polygon as _Poly
+    _surf = []
+    for c in by["TPX_ROADS_CONTOURS"]:
+        q = [tv(p) for p in c.points()]
+        if len(q) >= 3: _surf.append(_Poly([(a[0], a[2]) for a in q]).buffer(0))
+    out["markings"] = markings.build(edges, _surf)
+
 # bounds
 allp = np.array(out["terrain"]["pos"]).reshape(-1, 3)
 out["bounds"] = {"min": allp.min(0).round(1).tolist(), "max": allp.max(0).round(1).tolist()}

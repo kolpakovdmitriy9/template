@@ -219,5 +219,6 @@ window.__pf = {
   hold: false,
   seek(t){ placeIdle(); start(); while (T < t) step(1 / 30, 1); render(); },
   idleAt(p){ placeIdle(); step(0, p); render(); },
+  view(x, z, wm){ cx = x; cz = z; ppm = rectBox().width / wm; elev = 90; azim = 90; fov = FOV_END; world.car.visible = false; render(); },     // test: look straight down at a point
   get state(){ return state; }, get T(){ return T; }, get ppm(){ return ppm; }, get elev(){ return elev; }, get fov(){ return fov; }, get cam(){ return {cx, cz, ppm}; }, step: (dt) => step(dt, 1), world,
 };

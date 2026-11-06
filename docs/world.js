@@ -7,7 +7,7 @@ export const CAR_SCALE = 0.5;     // Cybertruck is ~6 m long; 0.5 -> ~3 m so it 
 const STEER_MAX = 0.85;           // rad (~49 deg)
 export const PAL = {              // light "paper-model" palette
   bg: 0xf4f7f9, ground: 0xeeeeec, road: 0xd3d5d8, building: 0xf3f2f0, edge: 0xcfcfcc,
-  water: 0xd6e9f3, green: 0xdcefd3, crown: 0xa9e37c, trunk: 0x8a5a3c,
+  water: 0xd6e9f3, green: 0xdcefd3, crown: 0xa9e37c, trunk: 0x8a5a3c, mark: 0xffffff,
 };
 
 /**
@@ -44,6 +44,9 @@ addMesh(data.water, new THREE.MeshStandardMaterial({color:PAL.water, side:DS, ro
   polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2}), {y:.05});
 addMesh(data.roads, new THREE.MeshStandardMaterial({color:PAL.road, side:DS, roughness:1,
   polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-1}), {y:.2});
+// road markings (zebra crossings, turn arrows, dashed centre lines): flat triangles on top of the roads; only in the flat world
+if (data.markings && data.markings.idx.length) addMesh(data.markings, new THREE.MeshStandardMaterial({color:PAL.mark, side:DS, roughness:1,
+  polygonOffset:true, polygonOffsetFactor:-3, polygonOffsetUnits:-3}), {y:.24});
 const bld = addMesh(data.buildings, new THREE.MeshStandardMaterial({color:PAL.building, side:DS, roughness:1, flatShading:true}), {cast:true});
 if (bld) scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(bld.geometry, 25),
   new THREE.LineBasicMaterial({color:PAL.edge})));
