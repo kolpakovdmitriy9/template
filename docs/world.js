@@ -48,6 +48,7 @@ addMesh(data.roads, new THREE.MeshStandardMaterial({color:PAL.road, side:DS, rou
 if (data.markings && data.markings.idx.length) addMesh(data.markings, new THREE.MeshStandardMaterial({color:PAL.mark, side:DS, roughness:1,
   polygonOffset:true, polygonOffsetFactor:-3, polygonOffsetUnits:-3}), {y:.24});
 
+let sigVisual = null;                 // lamp meshes of the traffic lights, set when the props are built
 // street furniture (flat world only): sign posts with road signs and traffic lights on junction corners
 if (data.props){
   const P = data.props, M = new THREE.Matrix4(), Q = new THREE.Quaternion(), V = new THREE.Vector3(), S = new THREE.Vector3(1,1,1);
@@ -99,6 +100,7 @@ if (data.props){
       lamp(lampRed, .3); lamp(lampYel, 0); lamp(lampGrn, -.3);
     });
     [lpole, head, lampRed, lampYel, lampGrn].forEach(m => { m.instanceMatrix.needsUpdate = true; m.castShadow = m === lpole || m === head; scene.add(m); });
+    sigVisual = {phases: lights.map(l => l[4]), lamps: {r: lampRed, y: lampYel, g: lampGrn}};
   }
 }
 const bld = addMesh(data.buildings, new THREE.MeshStandardMaterial({color:PAL.building, side:DS, roughness:1, flatShading:true}), {cast:true});
@@ -253,10 +255,14 @@ const routePts = []; let routeW = 99;
     const last = routePts[routePts.length-1]; if (!last || Math.hypot(last[0]-pt[0], last[2]-pt[2]) > .05) routePts.push(pt); }); });
   const y0 = routePts[0][1]; ROUTE.pre.slice().reverse().forEach(([x, z]) => routePts.unshift([x, y0, z]));
 }
+const LOOP = data.loop || null;                       // closed driving loop (exporter): entry street, then a road cycle forever
+if (LOOP){ routePts.length = 0; LOOP.pre.forEach(p => routePts.push(p)); LOOP.cyc.slice(1).forEach(p => routePts.push(p)); }
 const route = (() => {
   const pts = routePts.map(p => new THREE.Vector3(p[0], p[1] + .2, p[2]));
   const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i-1] + pts[i].distanceTo(pts[i-1]));
-  return {w:routeW, pts, cum, len:cum[cum.length-1], ends:[pts[0], pts[pts.length-1]]};
+  const r = {w:LOOP ? 3.0 : routeW, pts, cum, len:cum[cum.length-1], ends:[pts[0], pts[pts.length-1]]};
+  if (LOOP){ const i0 = LOOP.pre.length - 1; r.loopStart = cum[i0]; r.cycLen = cum[cum.length-1] - cum[i0]; }   // metres, not indices
+  return r;
 })();
 const edges = [route];
 const neighbours = () => [];            // both ends are dead ends: the car U-turns and drives the route back and forth
@@ -306,6 +312,11 @@ function advance(ds){
   if (uturn){                                           // semicircle across the road at a dead end
     uturn.phi += ds / uturn.r;
     if (uturn.phi >= Math.PI){ dir = -dir; dist = 0; uturn = null; }
+    return;
+  }
+  if (cur.loopStart !== undefined){                    // closed loop: no dead ends, no U-turns
+    dist += ds;
+    if (dist >= cur.len) dist = cur.loopStart + ((dist - cur.loopStart) % cur.cycLen);
     return;
   }
   dist += ds;
@@ -374,9 +385,45 @@ function place(dt, ds){
 // ---------------------------------------------------------------- per-frame logic
 let v = 0, brakeHold = 0, brakeK = 0;
 setBrake(0);
+// ---------------------------------------------------------------- traffic lights (fixed-time cycle, two phases)
+// phase 0: green 0–14 s, yellow 14–17 s, all-red 17–18 s; phase 1 is the same, shifted by 18 s (so it is green when phase 0 is red)
+const SIG_CYCLE = 36, SIG_GREEN = 14, SIG_YELLOW = 3, SIG_SHIFT = 18, SIG_AC = 3.5;   // AC: comfortable braking, m/s²
+let simT = 0;
+const SIGNALS = (data.props && data.props.signals) || [];
+function lightState(phase){
+  const t = (simT + phase * SIG_SHIFT) % SIG_CYCLE;
+  return t < SIG_GREEN ? 'g' : t < SIG_GREEN + SIG_YELLOW ? 'y' : 'r';
+}
+// the speed the car may have now so that it stops before the next red (or yellow it cannot clear) stop line
+function signalLimit(){
+  if (!SIGNALS.length || !cur || cur.loopStart === undefined) return Infinity;
+  let lim = Infinity;
+  for (const g of SIGNALS){
+    const D = ((g.s - dist) % cur.cycLen + cur.cycLen) % cur.cycLen;      // metres ahead to the stop line
+    if (D > 70) continue;
+    const st = lightState(g.phase);
+    if (st === 'g') continue;
+    if (st === 'y' && D < v * v / (2 * SIG_AC)) continue;                // too close to stop comfortably: go through
+    lim = Math.min(lim, Math.sqrt(2 * SIG_AC * Math.max(D - 2.0, 0)));   // brake to rest 2 m before the line
+  }
+  return lim;
+}
+// lamp colours: the lit lamp of each light head follows its phase
+const lampCol = { r: [0xff3b30, 0x4a1410], y: [0xffcc00, 0x4a3d10], g: [0x34c759, 0x163a20] };
+function updateLamps(){
+  if (!sigVisual) return;
+  const c = new THREE.Color();
+  sigVisual.phases.forEach((ph, i) => {
+    const st = lightState(ph);
+    for (const k of ['r', 'y', 'g']){ c.setHex(lampCol[k][st === k ? 0 : 1]); sigVisual.lamps[k].setColorAt(i, c); }
+  });
+  for (const k of ['r', 'y', 'g']) sigVisual.lamps[k].instanceColor.needsUpdate = true;
+}
+
 function update(dt, base){
+  simT += dt; updateLamps();
   // speed: slow down for turns (look at the steering angle), brake lights glow only while braking
-  const target = base * (1 - .65 * Math.min(Math.abs(steerS) / .45, 1));
+  const target = Math.min(base * (1 - .65 * Math.min(Math.abs(steerS) / .45, 1)), signalLimit());
   const prevV = v;
   v += Math.max(-14 * dt, Math.min(6 * dt, target - v));
   const decel = (prevV - v) / Math.max(dt, 1e-3);
@@ -393,5 +440,6 @@ return {
   bounds: {cx: cxm, cz: czm, size: SIZE, minX: b.min[0], maxX: b.max[0], minZ: b.min[2], maxZ: b.max[2]},
   get speed(){ return v; }, set speed(x){ v = x; }, get steer(){ return steerS; }, get brake(){ return brakeK; },
   goto(i, d, dr = 1){ cur = edges[i]; dir = dr; dist = d; uturn = null; },
+  signals: SIGNALS, signalState: (i) => lightState(SIGNALS[i].phase), simT: () => simT, routeInfo: () => ({len: route.len, loopStart: route.loopStart, cycLen: route.cycLen}),
 };
 }

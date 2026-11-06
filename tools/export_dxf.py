@@ -154,6 +154,43 @@ except ImportError:
 edges = [e for e in edges if e["w"] >= 2.5]
 out["roadGraph"] = {"width": round(road_w, 2), "edges": edges}
 
+# closed driving loop (flat world): the car enters from the east along the street and then goes round a closed road cycle
+# forever, never turning back. Found as the shortest return path in the road graph, without reusing the entry street.
+import heapq as _hq
+_ROUTE_X0, _ROUTE_Z0 = 560.0, -339.0
+_ei = min(range(len(edges)), key=lambda i: math.dist(edges[i]["pts"][0][::2], (249.0, -328.0)) + math.dist(edges[i]["pts"][-1][::2], (421.5, -337.4)))
+_e = edges[_ei]
+_A, _B = _e["b"], _e["a"]
+_adj = {}
+def _L(pts): return sum(math.dist((p[0], p[2]), (q[0], q[2])) for p, q in zip(pts, pts[1:]))
+for _i, _x in enumerate(edges):
+    if _i == _ei: continue
+    _w = _L(_x["pts"])
+    _adj.setdefault(_x["a"], []).append((_x["b"], _i, +1, _w))
+    _adj.setdefault(_x["b"], []).append((_x["a"], _i, -1, _w))
+_dist = {_B: 0.0}; _prev = {}; _pq = [(0.0, _B)]
+while _pq:
+    _d, _u = _hq.heappop(_pq)
+    if _u == _A: break
+    if _d > _dist.get(_u, 1e18): continue
+    for _v, _i, _dr, _w in _adj.get(_u, []):
+        if _d + _w < _dist.get(_v, 1e18):
+            _dist[_v] = _d + _w; _prev[_v] = (_u, _i, _dr); _hq.heappush(_pq, (_d + _w, _v))
+if _A in _dist:
+    _path = []; _n = _A
+    while _n != _B:
+        _u, _i, _dr = _prev[_n]; _path.append((_i, _dr)); _n = _u
+    _path.reverse()
+    _cyc = list(reversed(_e["pts"]))                     # the entry street, travelled west (the car heads west at the route start)
+    for _i, _dr in _path:
+        _pts = edges[_i]["pts"] if _dr > 0 else list(reversed(edges[_i]["pts"]))
+        _cyc += _pts[1:]
+    _pre = [[_ROUTE_X0, 0.0, _ROUTE_Z0], [446.0, 0.0, _ROUTE_Z0], _cyc[0]]          # east entry -> the cycle's first point
+    out["loop"] = {"pre": [[round(p[0], 2), 0.0, round(p[2], 2)] for p in _pre], "cyc": [[round(p[0], 2), 0.0, round(p[2], 2)] for p in _cyc]}
+    print("driving loop:", len(_cyc), "points, %.0f m" % _L(_cyc), "via", len(_path) + 1, "road pieces")
+else:
+    print("driving loop: no cycle found")
+
 # road markings (flat world only): zebra crossings, turn arrows, dashed centre lines - see tools/markings.py
 if FLAT:
     import os as _os
@@ -164,7 +201,8 @@ if FLAT:
     for c in by["TPX_ROADS_CONTOURS"]:
         q = [tv(p) for p in c.points()]
         if len(q) >= 3: _surf.append(_Poly([(a[0], a[2]) for a in q]).buffer(0))
-    out["markings"], out["props"] = markings.build(edges, _surf)
+
+    out["markings"], out["props"] = markings.build(edges, _surf, loop=out.get("loop"))
 
 # bounds
 allp = np.array(out["terrain"]["pos"]).reshape(-1, 3)

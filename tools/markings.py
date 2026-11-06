@@ -91,7 +91,7 @@ def _tris(poly, out_pos, out_idx):
             out_idx += [base, base + 1, base + 2]
 
 
-def build(edges, surface_polys, log=print):
+def build(edges, surface_polys, loop=None, log=print):
     """edges: [{'pts': [[x, y, z], ...], 'w': width}], surface_polys: road contour polygons in (x, z)"""
     surf = unary_union(surface_polys).buffer(0)
     surf_in = surf.buffer(-0.12)
@@ -232,40 +232,56 @@ def build(edges, surface_polys, log=print):
             s += 5.0
     log("dashes:", dashes)
 
+    props = _props(E, lines, centres, surf, surf_in, zeb, loop, shapes, log)
     pos, idx = [], []
     for _, g in shapes:
         _tris(g, pos, idx)
     log("marking triangles:", len(idx) // 3)
-    props = _props(E, lines, centres, surf, zeb, log)
     return {"pos": pos, "idx": idx}, props
 
 
-def _props(E, lines, centres, surf, zeb, log):
-    """traffic lights on junction corners and sign posts along the right-hand kerb (outside the carriageway)"""
-    near_surf = surf.buffer(0.0)
+def _props(E, lines, centres, surf, surf_in, zeb, loop, shapes, log):
+    """signals (stop lines, lights) on the driving loop and sign posts along the right-hand kerb"""
     def on_kerb(x, z):
         p = Point(x, z)
         return (not surf.buffer(0.25).contains(p)) and surf.distance(p) < 2.2
-    poles, signs, lights = [], [], []
-    # ---- traffic lights: diagonal corners of junctions with three or more roads
-    for cxj, czj, _ in centres:
-        c = Point(cxj, czj)
-        near = [(k, lines[k], E[k][1]) for k in range(len(lines)) if lines[k].distance(c) <= 7.0]
-        if len(near) < 3: continue
-        wmax = max(w for _, _, w in near)
-        r = wmax / 2 + 1.6
-        placed_here = 0
-        for ang in (45, 225, 135, 315):
-            if placed_here >= 2: break
-            a = math.radians(ang)
-            x, z = cxj + math.cos(a) * r, czj + math.sin(a) * r
-            if not on_kerb(x, z): continue
-            # the light faces the junction centre
-            nx, nz = _unit(cxj - x, czj - z)
-            lights.append([round(x, 2), round(z, 2), round(nx, 3), round(nz, 3)])
-            placed_here += 1
-    log("traffic lights:", len(lights))
-    # ---- sign posts: every ~42 m along each road, on the right-hand kerb
+    poles, signs, lights, signals = [], [], [], []
+    # ---------- signals: approaches of four-arm junctions that the driving loop passes through
+    if loop:
+        pre = [(p[0], p[2]) for p in loop["pre"]]
+        cyc = [(p[0], p[2]) for p in loop["cyc"]]
+        pre_len = LineString(pre).length
+        LPl = LineString(cyc)
+        for cxj, czj, _ in centres:
+            c = Point(cxj, czj)
+            arms = [(k, lines[k], E[k][1]) for k in range(len(lines)) if lines[k].distance(c) <= 7.0]
+            if len(arms) < 4: continue
+            for k, line, w in arms:
+                L = line.length
+                if L < 14: continue
+                s0 = line.project(c)
+                sgn = 1 if s0 > L / 2 else -1                  # traffic on this arm travels towards the junction
+                D = w / 2 + 3.0
+                ss = s0 - sgn * D
+                if ss < 1 or ss > L - 1: continue
+                tl = _tang(line, ss)
+                u = (sgn * tl[0], sgn * tl[1])                 # direction of the approaching traffic
+                r = (-u[1], u[0])                              # its right-hand lane
+                px, pz = _pt(line, ss)
+                P = Point(px + r[0] * w / 4, pz + r[1] * w / 4)  # stop line centre in the right lane
+                if LPl.distance(P) > 2.6: continue             # the loop must really pass here
+                lp = LPl.project(P)
+                lt = _tang(LPl, lp)
+                if lt[0] * u[0] + lt[1] * u[1] < .8: continue  # ...and drive the same way
+                stop = _rect(P.x, P.y, u, r, 0.5, w / 2)
+                if stop.intersection(surf_in).area < stop.area * .8: continue
+                phase = 0 if abs(u[0]) > abs(u[1]) else 1
+                shapes.append(('stop', stop))
+                signals.append({"s": round(pre_len + lp, 2), "phase": phase})
+                qx, qz = px + r[0] * (w / 2 + .6), pz + r[1] * (w / 2 + .6)
+                lights.append([round(qx, 2), round(qz, 2), round(-u[0], 3), round(-u[1], 3), phase])
+        log("signals on the loop:", len(signals))
+    # ---------- sign posts along the right-hand kerb; each post has a sign for each travel direction
     kinds = {"turn": 0, "ped": 0, "limit": 0}
     zpts = [(zx, zz) for zx, zz in zeb]
     for line, w in E:
@@ -278,16 +294,18 @@ def _props(E, lines, centres, surf, zeb, log):
             px, pz = _pt(line, s)
             x, z = px + r[0] * (w / 2 + .9), pz + r[1] * (w / 2 + .9)
             if on_kerb(x, z) and not any(math.hypot(x - a, z - b) < 12 for a, b, *_ in poles):
-                # sign kind: a bend ahead -> turn sign, a crossing nearby -> pedestrian sign, otherwise a speed limit
                 a0 = _tang(line, s - 8, 2.0); a1 = _tang(line, s + 8, 2.0)
                 ang = math.degrees(math.atan2(a0[0] * a1[1] - a0[1] * a1[0], a0[0] * a1[0] + a0[1] * a1[1]))
-                if abs(ang) >= 22: kind = "turn"; code = 1 if ang > 0 else -1
-                elif any(math.hypot(zx - x, zz - z) < 16 for zx, zz in zpts): kind = "ped"; code = 0
-                else: kind = "limit"; code = 40 if (int(s) // 40) % 2 == 0 else 60
-                nx, nz = -r[0], -r[1]                      # the sign faces the traffic (back towards the road)
+                near_ped = any(math.hypot(zx - x, zz - z) < 16 for zx, zz in zpts)
                 poles.append([round(x, 2), round(z, 2)])
-                signs.append([round(x, 2), round(z, 2), round(nx, 3), round(nz, 3), kind, code])
-                kinds[kind] += 1
+                for dsign in (+1, -1):                     # +1: traffic going along the line, -1: against it
+                    # the plate faces the oncoming traffic, so its normal points back along the traffic's travel
+                    nx, nz = -dsign * t[0], -dsign * t[1]
+                    if abs(ang) >= 22: kind = "turn"; code = (1 if ang > 0 else -1) * dsign
+                    elif near_ped: kind = "ped"; code = 0
+                    else: kind = "limit"; code = 40 if (int(s) // 40) % 2 == 0 else 60
+                    signs.append([round(x, 2), round(z, 2), round(nx, 3), round(nz, 3), kind, code])
+                    kinds[kind] += 1
             s += 42.0
-    log("sign posts:", len(poles), kinds)
-    return {"poles": poles, "signs": signs, "lights": lights}
+    log("sign posts:", len(poles), "signs:", len(signs), kinds)
+    return {"poles": poles, "signs": signs, "lights": lights, "signals": signals}
