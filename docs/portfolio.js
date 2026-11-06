@@ -1,7 +1,8 @@
 // Portfolio scene: a fixed top-down (orthographic) view of the map inside #map-rect.
 //   idle  -> the rectangle shows a zoomed-in street, the car waits off-screen on the right
 //   run   -> as soon as the rectangle is fully on screen: the car flies in from the right edge of the screen,
-//            drives onto the road inside the rectangle, then the camera smoothly zooms out until the whole map is visible.
+//            drives onto the road inside the rectangle, then the camera zooms out a little (the car stays clearly visible)
+//            and keeps following it. The view never leaves the map, so there is never an empty area in the rectangle.
 // The map is clipped to the rectangle (scissor); the car is drawn on top of the page, so it can leave the rectangle.
 // The camera cannot be controlled by the user.
 //
@@ -15,11 +16,12 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------------------------------------------------------------- timeline settings
 const T_ZOOM_START = 1.3;      // s after the trigger: start zooming out (the car has entered the rectangle by then)
-const T_ZOOM_DUR   = 7.0;      // s: length of the zoom-out
+const T_ZOOM_DUR   = 5.0;      // s: length of the zoom-out
 const FLY_SPEED    = 14;       // m/s when the car enters
 const START_SPEED  = 9;        // m/s cruising while zoomed in
-const END_SPEED    = 40;       // m/s at the end (the map is tiny, so the car is sped up to stay visible)
+const END_SPEED    = 14;       // m/s once zoomed out
 const ROWS_W_M     = 5.6;      // metres of road visible across the rectangle width at the start (car ~ 3 m long)
+const END_W_M      = 32;       // metres visible across the rectangle width at the end: the car (~3 m) is ~1/10 of the width
 const START_X      = 380;      // scene x of the street point shown in the middle of the rectangle at the start
 const ROUTE_X0     = 560;      // route is extended east so the car can come from beyond the screen edge
 
@@ -37,13 +39,6 @@ car.traverse(o => o.layers.set(1));
 world.sun.layers.enable(1); world.hemi.layers.enable(1);
 world.hemi.intensity = 2.4; world.sun.intensity = 1.0;      // top-down needs more fill light than the 3D view
 
-// a dot that keeps the car findable when the map is zoomed out
-const marker = new THREE.Group();
-const mk = (r, color) => { const m = new THREE.Mesh(new THREE.CircleGeometry(r, 32).rotateX(-Math.PI/2),
-  new THREE.MeshBasicMaterial({color, transparent:true, depthTest:false, fog:false})); m.renderOrder = 10; return m; };
-const dotRing = mk(1.45, 0xffffff), dotCore = mk(1, 0xffc800);
-dotCore.renderOrder = 11; marker.add(dotRing, dotCore); scene.add(marker);
-
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 50, 4000);
 camera.up.set(0, 0, -1);                    // north (-z) is up on the screen; east (+x) is right
 camera.layers.enable(0); camera.layers.enable(1);
@@ -52,7 +47,6 @@ camera.layers.enable(0); camera.layers.enable(1);
 const routeAtX = x => { const p = world.route.pts; for (let i = 1; i < p.length; i++){ const a = p[i-1], b = p[i];
   if ((a.x - x) * (b.x - x) <= 0){ const t = (x - a.x) / ((b.x - a.x) || 1); return new THREE.Vector3(x, a.y + (b.y-a.y)*t, a.z + (b.z-a.z)*t); } } return p[0].clone(); };
 const S0 = routeAtX(START_X);
-const mapCx = bounds.cx, mapCz = bounds.cz, mapW = bounds.maxX - bounds.minX, mapH = bounds.maxZ - bounds.minZ;
 
 // ---------------------------------------------------------------- state
 let state = 'idle', T = 0, follow = false, fx = S0.x, fz = S0.z, ppm = 60, cx = S0.x, cz = S0.z;
@@ -64,7 +58,7 @@ const rectBox = () => rectEl.getBoundingClientRect();
 
 function viewParams(r){
   const ppm0 = r.width / ROWS_W_M;                                       // px per metre at the start
-  const ppm1 = Math.min(r.width / mapW, r.height / mapH) * .96;          // whole map fits in the rectangle
+  const ppm1 = r.width / END_W_M;                                        // px per metre at the end (car clearly visible)
   return {ppm0, ppm1};
 }
 function placeIdle(){
@@ -87,16 +81,13 @@ function step(dt){
     const e = ease(clamp((T - T_ZOOM_START) / T_ZOOM_DUR));
     world.update(dt, lerp(START_SPEED, END_SPEED, e));
     if (!follow && car.position.x <= S0.x) follow = true;                // the car has passed the centre: camera follows
-    if (follow){ const k = 1 - Math.exp(-dt * 5); fx += (car.position.x - fx) * k; fz += (car.position.z - fz) * k; }
+    if (follow){ const k = 1 - Math.exp(-dt * 6); fx += (car.position.x - fx) * k; fz += (car.position.z - fz) * k; }
     ppm = Math.exp(lerp(Math.log(ppm0), Math.log(ppm1), e));
-    // slide the view centre from the car to the map centre in step with the *visible area* (1/ppm), not with time:
-    // early on the car stays in the middle of the rectangle, the pan happens while the map is already small
-    const wv = clamp((1 / ppm - 1 / ppm0) / (1 / ppm1 - 1 / ppm0));
-    cx = lerp(fx, mapCx, wv); cz = lerp(fz, mapCz, wv);
-    const q = clamp((4 - ppm) / 2.5);                                    // dot fades in once the car is tiny
-    dotRing.material.opacity = dotCore.material.opacity = q; marker.visible = q > .01;
-    marker.position.set(car.position.x, 300, car.position.z); marker.scale.setScalar(7 / ppm);
-  } else { ppm = ppm0; cx = S0.x; cz = S0.z; marker.visible = false; }
+    cx = fx; cz = fz;
+    // keep the whole rectangle inside the map: the view centre is clamped by half the visible size
+    const hw = r.width / 2 / ppm, hh = r.height / 2 / ppm;
+    cx = clamp(cx, bounds.minX + hw, bounds.maxX - hw); cz = clamp(cz, bounds.minZ + hh, bounds.maxZ - hh);
+  } else { ppm = ppm0; cx = S0.x; cz = S0.z; }
 }
 
 // ---------------------------------------------------------------- render
