@@ -218,19 +218,43 @@ def build(edges, surface_polys, loop=None, log=print):
                 put_arrow(line, w, s, direction, lambda pos, t: unary_union([_turn_arrow(pos, t, -1), _turn_arrow(pos, t, +1)]))
     log("arrows:", arrows)
 
-    # ---------- dashed centre line on wide roads (>= 6 m)
-    dashes = 0
+    # ---------- centre lines between the two directions: dashed on wide roads (>= 6 m), solid on narrower ones (>= 2.9 m).
+    # Drawn along the road axis, interrupted near junctions (the crossings and stop lines are there).
+    jc = [Point(c[0], c[1]) for c in centres]
+    def near_junction(x, z):
+        return any(math.hypot(x - c.x, z - c.y) < 9.0 for c in jc)
+    dashes = solids = 0
+    LW = 0.14
+    surf_run = surf_in.buffer(0.3)                  # computed once: buffering per sample is far too slow
     for (line, w) in E:
-        if w < 6.0: continue
-        s = 6.0
-        while s < line.length - 6:
-            px, pz = _pt(line, s + 1.0); t = _tang(line, s + 1.0); n = (-t[1], t[0])
-            d = _rect(px, pz, t, n, 2.0, 0.16)
-            g = d.intersection(surf_in)
-            if not g.is_empty and g.area >= d.area * .9 and free(px, pz, 3.6):
-                shapes.append(('dash', d)); dashes += 1
-            s += 5.0
-    log("dashes:", dashes)
+        L = line.length
+        if L < 4: continue
+        dashed = w >= 6.0
+        # runs of the axis where a centre line may be drawn
+        runs, cur_run = [], None
+        s = 0.0
+        while s <= L:
+            x, z = _pt(line, s)
+            ok = (not near_junction(x, z)) and surf_run.contains(Point(x, z))
+            if ok and cur_run is None: cur_run = s
+            if (not ok) and cur_run is not None:
+                runs.append((cur_run, s)); cur_run = None
+            s += 0.5
+        if cur_run is not None: runs.append((cur_run, L))
+        for r0, r1 in runs:
+            if r1 - r0 < 1.5: continue
+            if dashed:
+                q = r0
+                while q < r1 - 0.8:
+                    seg = min(3.0, r1 - q)
+                    if seg >= 1.5:
+                        mx, mz = _pt(line, q + seg / 2); t = _tang(line, q + seg / 2)
+                        shapes.append(('dash', _rect(mx, mz, t, (-t[1], t[0]), seg, LW))); dashes += 1
+                    q += seg + 3.0                              # 3 m gap
+            else:
+                mx, mz = _pt(line, (r0 + r1) / 2); t = _tang(line, (r0 + r1) / 2)
+                shapes.append(('solid', _rect(mx, mz, t, (-t[1], t[0]), r1 - r0, LW))); solids += 1
+    log("centre lines: dashed", dashes, "solid", solids)
 
     props = _props(E, lines, centres, surf, surf_in, zeb, loop, shapes, log)
     pos, idx = [], []
