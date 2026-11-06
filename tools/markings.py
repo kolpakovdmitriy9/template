@@ -129,18 +129,34 @@ def build(edges, surface_polys, log=print):
     def free(x, z, r=3.2):
         return all(math.hypot(x - px, z - pz) >= r for px, pz in placed)
     zebras = 0
+    MAX_ZEBRA_PER_JUNCTION = 2
+    def straight(line, s, half=4.0):
+        # the road must be straight over the whole crossing (otherwise the stripes skew on a bend)
+        a = _tang(line, s - half, 1.5); b = _tang(line, s + half, 1.5)
+        return a[0] * b[0] + a[1] * b[1] > math.cos(math.radians(12))
     for cxj, czj, _ in centres:
         c = Point(cxj, czj)
         near = [(k, lines[k], E[k][1]) for k in range(len(lines)) if lines[k].distance(c) <= 7.0]
         if len(near) < 2: continue
         wmax = max(w for _, _, w in near)
         d = min(max(wmax / 2 + 2.2, 4.2), 9.0)
+        cand = []
         for k, line, w in near:
             s0 = line.project(c)
             for sign in (+1, -1):
                 s = s0 + sign * d
                 if s < 3 or s > line.length - 3: continue
                 if (sign > 0 and line.length - s0 < d + 6) or (sign < 0 and s0 < d + 6): continue
+                if not straight(line, s): continue
+                cand.append((k, line, w, s, sign))
+        # at most MAX_ZEBRA_PER_JUNCTION crossings per junction: prefer the wider roads, one per road
+        cand.sort(key=lambda t: -t[2])
+        used_roads = set(); chosen = 0
+        for k, line, w, s, sign in cand:
+            if chosen >= MAX_ZEBRA_PER_JUNCTION: break
+            if k in used_roads: continue
+            used_roads.add(k); chosen += 1
+            if True:
                 px, pz = _pt(line, s)
                 t = _tang(line, s); n = (-t[1], t[0])
                 if not free(px, pz): continue
