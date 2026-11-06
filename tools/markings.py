@@ -236,4 +236,58 @@ def build(edges, surface_polys, log=print):
     for _, g in shapes:
         _tris(g, pos, idx)
     log("marking triangles:", len(idx) // 3)
-    return {"pos": pos, "idx": idx}
+    props = _props(E, lines, centres, surf, zeb, log)
+    return {"pos": pos, "idx": idx}, props
+
+
+def _props(E, lines, centres, surf, zeb, log):
+    """traffic lights on junction corners and sign posts along the right-hand kerb (outside the carriageway)"""
+    near_surf = surf.buffer(0.0)
+    def on_kerb(x, z):
+        p = Point(x, z)
+        return (not surf.buffer(0.25).contains(p)) and surf.distance(p) < 2.2
+    poles, signs, lights = [], [], []
+    # ---- traffic lights: diagonal corners of junctions with three or more roads
+    for cxj, czj, _ in centres:
+        c = Point(cxj, czj)
+        near = [(k, lines[k], E[k][1]) for k in range(len(lines)) if lines[k].distance(c) <= 7.0]
+        if len(near) < 3: continue
+        wmax = max(w for _, _, w in near)
+        r = wmax / 2 + 1.6
+        placed_here = 0
+        for ang in (45, 225, 135, 315):
+            if placed_here >= 2: break
+            a = math.radians(ang)
+            x, z = cxj + math.cos(a) * r, czj + math.sin(a) * r
+            if not on_kerb(x, z): continue
+            # the light faces the junction centre
+            nx, nz = _unit(cxj - x, czj - z)
+            lights.append([round(x, 2), round(z, 2), round(nx, 3), round(nz, 3)])
+            placed_here += 1
+    log("traffic lights:", len(lights))
+    # ---- sign posts: every ~42 m along each road, on the right-hand kerb
+    kinds = {"turn": 0, "ped": 0, "limit": 0}
+    zpts = [(zx, zz) for zx, zz in zeb]
+    for line, w in E:
+        L = line.length
+        if L < 30: continue
+        s = 16.0
+        while s < L - 10:
+            t = _tang(line, s)
+            r = (-t[1], t[0])                              # right of travel
+            px, pz = _pt(line, s)
+            x, z = px + r[0] * (w / 2 + .9), pz + r[1] * (w / 2 + .9)
+            if on_kerb(x, z) and not any(math.hypot(x - a, z - b) < 12 for a, b, *_ in poles):
+                # sign kind: a bend ahead -> turn sign, a crossing nearby -> pedestrian sign, otherwise a speed limit
+                a0 = _tang(line, s - 8, 2.0); a1 = _tang(line, s + 8, 2.0)
+                ang = math.degrees(math.atan2(a0[0] * a1[1] - a0[1] * a1[0], a0[0] * a1[0] + a0[1] * a1[1]))
+                if abs(ang) >= 22: kind = "turn"; code = 1 if ang > 0 else -1
+                elif any(math.hypot(zx - x, zz - z) < 16 for zx, zz in zpts): kind = "ped"; code = 0
+                else: kind = "limit"; code = 40 if (int(s) // 40) % 2 == 0 else 60
+                nx, nz = -r[0], -r[1]                      # the sign faces the traffic (back towards the road)
+                poles.append([round(x, 2), round(z, 2)])
+                signs.append([round(x, 2), round(z, 2), round(nx, 3), round(nz, 3), kind, code])
+                kinds[kind] += 1
+            s += 42.0
+    log("sign posts:", len(poles), kinds)
+    return {"poles": poles, "signs": signs, "lights": lights}

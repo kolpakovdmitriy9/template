@@ -164,7 +164,7 @@ if FLAT:
     for c in by["TPX_ROADS_CONTOURS"]:
         q = [tv(p) for p in c.points()]
         if len(q) >= 3: _surf.append(_Poly([(a[0], a[2]) for a in q]).buffer(0))
-    out["markings"] = markings.build(edges, _surf)
+    out["markings"], out["props"] = markings.build(edges, _surf)
 
 # bounds
 allp = np.array(out["terrain"]["pos"]).reshape(-1, 3)

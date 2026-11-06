@@ -47,6 +47,60 @@ addMesh(data.roads, new THREE.MeshStandardMaterial({color:PAL.road, side:DS, rou
 // road markings (zebra crossings, turn arrows, dashed centre lines): flat triangles on top of the roads; only in the flat world
 if (data.markings && data.markings.idx.length) addMesh(data.markings, new THREE.MeshStandardMaterial({color:PAL.mark, side:DS, roughness:1,
   polygonOffset:true, polygonOffsetFactor:-3, polygonOffsetUnits:-3}), {y:.24});
+
+// street furniture (flat world only): sign posts with road signs and traffic lights on junction corners
+if (data.props){
+  const P = data.props, M = new THREE.Matrix4(), Q = new THREE.Quaternion(), V = new THREE.Vector3(), S = new THREE.Vector3(1,1,1);
+  const place = (inst, list, fn) => { list.forEach((it, i) => { fn(it, i); inst.setMatrixAt(i, M); }); inst.instanceMatrix.needsUpdate = true; return inst; };
+  const yaw = (nx, nz) => Q.setFromAxisAngle(new THREE.Vector3(0,1,0), Math.atan2(nx, nz));
+  // poles
+  const poleMat = new THREE.MeshStandardMaterial({color:0x6c7178, roughness:.6, metalness:.3});
+  const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.06, .06, 3.1, 6).translate(0, 1.55, 0), poleMat, P.poles.length);
+  place(poles, P.poles, (p, i) => { M.compose(V.set(p[0], 0, p[1]), Q.identity(), S); });
+  poles.castShadow = true; scene.add(poles);
+  // road signs: one instanced mesh per sign design (blue direction signs, white speed-limit discs)
+  const sign = (draw) => { const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d'); draw(x);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const blueSq = (x) => { x.fillStyle = '#1f6fd6'; x.fillRect(0, 0, 128, 128); x.fillStyle = '#fff'; x.strokeStyle = '#fff'; };
+  const arrowTex = (dir) => sign(x => { blueSq(x); x.save(); x.translate(64, 64); x.scale(dir, 1); x.beginPath();
+    x.moveTo(-34, -12); x.lineTo(8, -12); x.lineTo(8, -30); x.lineTo(38, 0); x.lineTo(8, 30); x.lineTo(8, 12); x.lineTo(-34, 12); x.closePath(); x.fill(); x.restore(); });
+  const pedTex = sign(x => { blueSq(x); x.beginPath(); x.arc(64, 40, 12, 0, Math.PI * 2); x.fill();
+    x.fillRect(54, 54, 20, 36); x.fillRect(40, 58, 10, 28); x.fillRect(78, 58, 10, 28); x.fillRect(48, 86, 10, 26); x.fillRect(70, 86, 10, 26); });
+  const limitTex = (v) => sign(x => { x.fillStyle = '#fff'; x.beginPath(); x.arc(64, 64, 60, 0, Math.PI * 2); x.fill();
+    x.strokeStyle = '#d7262b'; x.lineWidth = 12; x.beginPath(); x.arc(64, 64, 52, 0, Math.PI * 2); x.stroke();
+    x.fillStyle = '#111'; x.font = 'bold 60px Arial'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(String(v), 64, 68); });
+  const designs = {
+    'turn:1': arrowTex(1), 'turn:-1': arrowTex(-1), 'ped:0': pedTex, 'limit:40': limitTex(40), 'limit:60': limitTex(60)
+  };
+  const groups = {};
+  P.signs.forEach(sg => { const key = sg[4] === 'turn' ? 'turn:' + (sg[5] > 0 ? 1 : -1) : sg[4] === 'ped' ? 'ped:0' : 'limit:' + sg[5]; (groups[key] = groups[key] || []).push(sg); });
+  for (const [key, list] of Object.entries(groups)){
+    const mat = new THREE.MeshBasicMaterial({map: designs[key], side: THREE.DoubleSide, transparent: true, alphaTest: .05});
+    const inst = new THREE.InstancedMesh(new THREE.PlaneGeometry(.75, .75), mat, list.length);
+    place(inst, list, (sg) => { M.compose(V.set(sg[0], 2.6, sg[1]), yaw(sg[2], sg[3]), S); });
+    scene.add(inst);
+  }
+  // traffic lights: a dark head on top of a pole, three lamps on its front
+  const lights = P.lights;
+  if (lights.length){
+    const head = new THREE.InstancedMesh(new THREE.BoxGeometry(.36, .9, .26), new THREE.MeshStandardMaterial({color:0x1b1d20, roughness:.5}), lights.length);
+    const lampGeo = new THREE.PlaneGeometry(.1, .1);
+    const lampRed = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({color:0xff3b30}), lights.length);
+    const lampYel = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({color:0xffcc00}), lights.length);
+    const lampGrn = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({color:0x34c759}), lights.length);
+    const lposeGeo = new THREE.CylinderGeometry(.07, .07, 3.4, 6).translate(0, 1.7, 0);
+    const lpole = new THREE.InstancedMesh(lposeGeo, poleMat, lights.length);
+    const off = new THREE.Vector3();
+    lights.forEach((l, i) => {
+      const q = yaw(l[2], l[3]); const fwd = new THREE.Vector3(l[2], 0, l[3]);
+      M.compose(V.set(l[0], 0, l[1]), Q.identity(), S); lpole.setMatrixAt(i, M);
+      M.compose(V.set(l[0], 3.45, l[1]), q, S); head.setMatrixAt(i, M);
+      const lamp = (inst, dy) => { M.compose(off.set(l[0], 3.45 + dy, l[1]).addScaledVector(fwd, .135), q, S); inst.setMatrixAt(i, M); };
+      lamp(lampRed, .3); lamp(lampYel, 0); lamp(lampGrn, -.3);
+    });
+    [lpole, head, lampRed, lampYel, lampGrn].forEach(m => { m.instanceMatrix.needsUpdate = true; m.castShadow = m === lpole || m === head; scene.add(m); });
+  }
+}
 const bld = addMesh(data.buildings, new THREE.MeshStandardMaterial({color:PAL.building, side:DS, roughness:1, flatShading:true}), {cast:true});
 if (bld) scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(bld.geometry, 25),
   new THREE.LineBasicMaterial({color:PAL.edge})));
