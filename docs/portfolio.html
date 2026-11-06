@@ -20,8 +20,11 @@
   .stage{display:grid;grid-template-columns:1fr 369px 1fr;gap:24px;align-items:stretch}
   .tag{align-self:start;justify-self:start;font-size:11px;letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;background:#f1f1f1;border-radius:8px;margin-top:30px}
   /* the rectangle that hosts the scene (the map is clipped to it) */
-  #map-rect{width:369px;height:635px;background:var(--map);position:relative}
-  .side{display:flex;flex-direction:column;justify-content:space-between;min-height:635px}
+  /* the rectangle is pinned (sticky) inside a tall track; the scroll through the track drives the camera, then the car starts */
+  :root{--map-w:369px;--map-h:635px;--pin-len:170vh}
+  .map-track{height:calc(var(--map-h) + var(--pin-len))}
+  #map-rect{width:var(--map-w);height:var(--map-h);background:var(--map);position:sticky;top:max(0px,calc(50vh - var(--map-h) / 2))}
+  .side{display:flex;flex-direction:column;justify-content:space-between;height:var(--map-h);align-self:start;position:sticky;top:max(0px,calc(50vh - var(--map-h) / 2))}
   .pill{display:inline-flex;align-items:center;gap:0}
   .pill i{display:grid;place-items:center;width:54px;height:38px;border-radius:19px;background:#000;color:#fff;font-style:normal}
   .pill b{font:500 18px/1 Inter;padding:9px 14px;border:1px solid #000;border-radius:19px;margin-left:-14px;background:#fff}
@@ -33,8 +36,9 @@
   @media (max-width:960px){
     .stage{grid-template-columns:1fr;justify-items:center;gap:20px}
     .tag{justify-self:center;margin:0}
-    #map-rect{width:min(369px,calc(100vw - 32px));height:calc(min(369px,100vw - 32px) * 635 / 369)}
-    .side{min-height:0;width:min(369px,calc(100vw - 32px))}
+    :root{--map-w:min(369px,calc(100vw - 32px));--map-h:calc(var(--map-w) * 635 / 369)}
+    #map-rect{margin:0 auto}
+    .side{position:static;height:auto;width:var(--map-w)}
     .big{margin-top:24px}
   }
 </style>
@@ -48,7 +52,7 @@
 
   <section class="stage">
     <div class="tag">● Начало</div>
-    <div id="map-rect" role="img" aria-label="Карта города, вид сверху: машина выезжает на дорогу и камера отдаляется"></div>
+    <div class="map-track"><div id="map-rect" role="img" aria-label="Карта города: камера опускается к виду сверху, затем машина выезжает на дорогу"></div></div>
     <div class="side">
       <div>
         <div class="pill"><i>🛒</i><b>2014</b></div>

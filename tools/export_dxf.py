@@ -1,13 +1,14 @@
 """Convert the topo DXF (binary, AC1024) into a compact scene.json for the web viewer.
 
-usage: python3 -I tools/export_dxf.py <in.dxf> <out.json>
+usage: python3 -I tools/export_dxf.py [--flat] <in.dxf> <out.json>
 Coordinates: DXF (x, y, z-up, metres) -> three.js (x, z, -y), re-centred on the map.
 """
 import sys, json, math, collections
 import numpy as np
 import ezdxf
 
-src, dst = sys.argv[1], sys.argv[2]
+FLAT = "--flat" in sys.argv          # flat world: every surface at y=0, buildings sit on it, no hills / bumps
+src, dst = [a for a in sys.argv[1:] if not a.startswith("--")][:2]
 doc = ezdxf.readfile(src)
 msp = doc.modelspace()
 
@@ -18,16 +19,20 @@ z0 = 0.0 if emin[2] < 50 else float(round(emin[2]))         # base elevation
 def tv(p):                      # DXF -> three
     return [round(p[0] - cx, 2), round(p[2] - z0, 2), round(-(p[1] - cy), 2)]
 
-def mesh_data(entities):
+def mesh_data(entities, base=False):
     pos, idx = [], []
     for e in entities:
-        base = len(pos) // 3
-        for v in e.vertices:
-            pos += tv(v)
+        base_i = len(pos) // 3
+        verts = list(e.vertices)
+        ymin = min((v[2] for v in verts), default=0)
+        for v in verts:
+            p = tv(v)
+            if FLAT: p[1] = round(v[2] - ymin, 2) if base else 0.0       # buildings keep their height, standing on y=0
+            pos += p
         for f in e.faces:
             f = list(f)
             for i in range(1, len(f) - 1):          # fan-triangulate
-                idx += [base + f[0], base + f[i], base + f[i + 1]]
+                idx += [base_i + f[0], base_i + f[i], base_i + f[i + 1]]
     return {"pos": pos, "idx": idx}
 
 by = collections.defaultdict(list)
@@ -36,7 +41,7 @@ for e in msp:
 
 out = {
     "terrain": mesh_data(by["TPX_TERRAIN_TERRAIN_MESH"]),
-    "buildings": mesh_data(by["TPX_BUILDINGS"]),
+    "buildings": mesh_data(by["TPX_BUILDINGS"], base=True),
     "roads": mesh_data(by["TPX_ROADS_HATCH"]),
     "water": mesh_data(by["TPX_WATERWAYS_HATCH"]),
     "green": mesh_data(by["TPX_VEGETATION_GREEN_SPACES_HATCH"]),
@@ -88,7 +93,7 @@ for e in by["TPX_VEGETATION_TREES_INDIVIDUAL"]:
                     round(float(cvv[:, 2].max()), 2), round(float(tvv[:, 0].max()), 2),
                     round(float(tvv[:, 2].min()), 2), round(float(tvv[:, 2].max()), 2)]
     i = e.dxf.insert
-    trees.append([round(i[0] - cx, 2), round(i[2] - z0, 2), round(-(i[1] - cy), 2)] + cache[n])
+    trees.append([round(i[0] - cx, 2), 0.0 if FLAT else round(i[2] - z0, 2), round(-(i[1] - cy), 2)] + cache[n])
 out["trees"] = trees   # x,y,z, crownR, crownZ0, crownZ1, trunkR, trunkZ0, trunkZ1
 
 # road graph from axes
@@ -133,7 +138,7 @@ edges = []
 for a, h in zip(axes, hatches):
     L = sum(math.dist(p[:2], q[:2]) for p, q in zip(a, a[1:]))
     w = hatch_area(h) / L if L > 1 else 0
-    edges.append({"a": node_id(a[0]), "b": node_id(a[-1]), "w": round(w, 1), "pts": [tv(p) for p in a]})
+    edges.append({"a": node_id(a[0]), "b": node_id(a[-1]), "w": round(w, 1), "pts": [([q[0], 0.0, q[2]] if FLAT else q) for q in (tv(p) for p in a)]})
 print("edge widths (m):", sorted({e["w"] for e in edges}, reverse=True)[:8], "...")
 try:
     from shapely.geometry import Polygon, LineString
