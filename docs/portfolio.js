@@ -1,6 +1,6 @@
-// Portfolio scene: the map inside #map-rect, seen through an orthographic camera that cannot be controlled by the user.
-//   idle  -> while the rectangle scrolls into view the camera tilts from a 3D angle (looking along the street) to a top-down
-//            view; the car waits off-screen on the right
+// Portfolio scene: the map inside #map-rect, seen through a camera that cannot be controlled by the user.
+//   idle  -> while the rectangle scrolls into view the camera flies from a low perspective view along the street (wide lens)
+//            to a straight top-down view (lens narrows to almost orthographic); the car waits off-screen on the right
 //   run   -> as soon as the rectangle is fully on screen (top-down) the car flies in from the right edge of the screen;
 //            when it reaches the centre the camera joins it smoothly (no jolt) and moves with it; a couple of seconds later
 //            the camera eases out a little so the car can be admired, and keeps following it along the route.
@@ -18,8 +18,10 @@ const canvas = document.getElementById('map-overlay');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------------------------------------------------------------- timeline settings
-const ELEV_IDLE    = 32;       // deg: camera elevation when the rectangle just starts to appear (90 = top-down)
-const ZOOM_IDLE    = 0.13;     // zoom at that moment relative to the start zoom: wide enough to see houses and trees (3D look)
+const ELEV_IDLE    = 17;       // deg: camera elevation when the rectangle just starts to appear (90 = top-down)
+const FOV_IDLE     = 58;       // deg: wide lens at that moment (strong perspective) ...
+const FOV_END      = 6;        // ... narrowing to almost orthographic for the top-down view
+const ZOOM_IDLE    = 0.2;      // zoom at that moment relative to the start zoom
 const ZOOM_DELAY   = 2.0;      // s the camera moves with the car at full zoom before it starts to ease out
 const ZOOM_DUR     = 3.5;      // s: length of the ease-out
 const FLY_SPEED    = 14;       // m/s when the car enters
@@ -75,7 +77,7 @@ function updateBlob(){
   blob.rotation.set(0, Math.atan2(-_f.z, _f.x), 0);
 }
 
-const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 100, 6000);
+const camera = new THREE.PerspectiveCamera(FOV_END, 1, 4, 12000);
 camera.layers.enable(0); camera.layers.enable(1);
 
 // street point (on the route) that is centred in the rectangle at the start
@@ -84,7 +86,7 @@ const routeAtX = x => { const p = world.route.pts; for (let i = 1; i < p.length;
 const S0 = routeAtX(START_X);
 
 // ---------------------------------------------------------------- state
-let state = 'idle', T = 0, Tc = null, ppm = 60, cx = S0.x, cz = S0.z, elev = 90, azim = 90;   // azim: 0 = looking west, 90 = looking north
+let state = 'idle', T = 0, Tc = null, ppm = 60, cx = S0.x, cz = S0.z, elev = 90, azim = 90, fov = FOV_END;   // azim: 0 = looking west, 90 = looking north
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const ease = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;      // easeInOutCubic
 const smooth = t => t * t * (3 - 2 * t);
@@ -102,7 +104,7 @@ function placeIdle(){
   const xOff = S0.x + (W - cxs) / ppm0 + 4;                              // just beyond the right edge of the screen
   world.goto(0, Math.max(ROUTE_X0 - xOff, 0), 1);
   world.speed = 0; world.update(1, 0);                                   // dt=1 settles heading/lights instantly
-  state = 'idle'; T = 0; Tc = null; cx = S0.x; cz = S0.z; ppm = ppm0; elev = 90; azim = 90;
+  state = 'idle'; T = 0; Tc = null; cx = S0.x; cz = S0.z; ppm = ppm0; elev = 90; azim = 90; fov = FOV_END;
   car.visible = false;                                                   // not on the map yet
 }
 function start(){
@@ -116,7 +118,7 @@ function step(dt, prog){
   const r = rectBox(), {ppm0, ppm1} = viewParams(r);
   if (state === 'run'){
     T += dt;
-    elev = 90; azim = 90;
+    elev = 90; azim = 90; fov = FOV_END;
     const e = Tc === null ? 0 : ease(clamp((T - Tc - ZOOM_DELAY) / ZOOM_DUR));
     world.update(dt, lerp(START_SPEED, END_SPEED, e));
     // the camera waits until the car reaches the centre, then its speed ramps smoothly from 0 to the car's speed over the
@@ -139,7 +141,7 @@ function step(dt, prog){
   } else {
     // scroll-driven: from a wide 3D view along the street to the top-down view the moment the rectangle is fully on screen
     const p = ease(prog);
-    elev = lerp(ELEV_IDLE, 90, p); azim = lerp(0, 90, p);
+    elev = lerp(ELEV_IDLE, 90, p); azim = lerp(0, 90, p); fov = Math.exp(lerp(Math.log(FOV_IDLE), Math.log(FOV_END), p));
     ppm = Math.exp(lerp(Math.log(ppm0 * ZOOM_IDLE), Math.log(ppm0), p)); cx = S0.x; cz = S0.z;
   }
 }
@@ -148,12 +150,13 @@ function step(dt, prog){
 function render(){
   updateBlob();
   const r = rectBox();
-  // the point (cx, cz) is shown at the centre of the rectangle
+  // the point (cx, cz) is shown at the centre of the rectangle: shift the principal point of the lens there
   const cxs = r.left + r.width / 2, cys = r.top + r.height / 2;
-  camera.left = -cxs / ppm; camera.right = (W - cxs) / ppm; camera.top = cys / ppm; camera.bottom = -(H - cys) / ppm;
-  camera.updateProjectionMatrix();
+  camera.aspect = W / H; camera.fov = fov;
+  camera.setViewOffset(W, H, W / 2 - cxs, H / 2 - cys, W, H);
   // orbit around the ground point: elevation 90 = straight down with north up; lower = tilted, looking along `azim`
-  const e = elev * Math.PI / 180, a = azim * Math.PI / 180, D = 3000;
+  // distance chosen so that `ppm` pixels cover one metre at the target (the lens narrows -> the camera backs away)
+  const e = elev * Math.PI / 180, a = azim * Math.PI / 180, D = H / (2 * ppm * Math.tan(fov * Math.PI / 360));
   const hx = -Math.cos(a), hz = -Math.sin(a);                            // horizontal look direction (west -> north)
   camera.up.set(hx * Math.sin(e), Math.cos(e), hz * Math.sin(e));
   camera.position.set(cx - hx * D * Math.cos(e), D * Math.sin(e), cz - hz * D * Math.cos(e));
@@ -163,18 +166,23 @@ function render(){
   world.hemi.intensity = lerp(1.3, 2.4, kk); world.sun.intensity = lerp(2.0, 1.0, kk);
   renderer.setViewport(0, 0, W, H);
   renderer.clear();
+  // scissor in whole device pixels (fractional browser zoom would otherwise leave a 1px seam between the passes)
+  const dpr = renderer.getPixelRatio(), Hd = Math.floor(H * dpr);
+  const scissor = (x0, y0, x1, y1) => {
+    const A = Math.round(x0 * dpr), B = Math.round(x1 * dpr), C = Math.round(y0 * dpr), Dd = Math.round(y1 * dpr);
+    if (B <= A || Dd <= C) return false;
+    renderer.setScissor((A + .01) / dpr, (Hd - Dd + .01) / dpr, (B - A + .01) / dpr, (Dd - C + .01) / dpr); return true; };
   // pass A: map + car, only inside the rectangle
   camera.layers.enable(0); camera.layers.enable(1); camera.layers.disable(2);
-  renderer.setScissorTest(true); renderer.setScissor(r.left, H - r.bottom, r.width, r.height);
-  renderer.render(scene, camera);
-  // pass B: the car + its shadow on the four areas around the rectangle (so nothing is drawn twice)
+  renderer.setScissorTest(true);
+  if (scissor(r.left, r.top, r.right, r.bottom)) renderer.render(scene, camera);
+  // pass B: the car + its shadow on the four areas around the rectangle; they overlap the rectangle by one device pixel
+  // so no seam is left between the passes
   camera.layers.set(1); camera.layers.enable(2);
   renderer.shadowMap.autoUpdate = false;
-  const areas = [[0, 0, W, r.top], [0, r.bottom, W, H - r.bottom], [0, r.top, r.left, r.height], [r.right, r.top, W - r.right, r.height]];
-  for (const [x, y, w, h] of areas){
-    if (w < 1 || h < 1) continue;
-    renderer.setScissor(x, H - (y + h), w, h); renderer.render(scene, camera);
-  }
+  const o = 1 / dpr;
+  const areas = [[0, 0, W, r.top + o], [0, r.bottom - o, W, H], [0, r.top, r.left + o, r.bottom], [r.right - o, r.top, W, r.bottom]];
+  for (const [x0, y0, x1, y1] of areas) if (scissor(x0, y0, x1, y1)) renderer.render(scene, camera);
   renderer.shadowMap.autoUpdate = true;
   renderer.setScissorTest(false);
 }
@@ -206,5 +214,5 @@ window.__pf = {
   hold: false,
   seek(t){ placeIdle(); start(); while (T < t) step(1 / 30, 1); render(); },
   idleAt(p){ placeIdle(); step(0, p); render(); },
-  get state(){ return state; }, get T(){ return T; }, get ppm(){ return ppm; }, get elev(){ return elev; }, get cam(){ return {cx, cz, ppm}; }, step: (dt) => step(dt, 1), world,
+  get state(){ return state; }, get T(){ return T; }, get ppm(){ return ppm; }, get elev(){ return elev; }, get fov(){ return fov; }, get cam(){ return {cx, cz, ppm}; }, step: (dt) => step(dt, 1), world,
 };
