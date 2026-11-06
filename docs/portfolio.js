@@ -199,15 +199,19 @@ function pinState(){
   const any = r.bottom > 0 && r.top < H && r.right > 0 && r.left < W;
   return {prog, any};
 }
-let prev = performance.now();
+let prev = performance.now(), progS = null;
 renderer.setAnimationLoop(now => {
   const dt = Math.min((now - prev) / 1000, .1); prev = now;
   if (window.__pf && window.__pf.hold) return;                            // test hook: freeze the loop
   const f = pinState();
-  if (state === 'idle' && f.prog >= 1) start();
-  if (state === 'run' && (f.prog < .6 || !f.any) && T > .5){ placeIdle(); } // scrolled back up / away: re-arm, plays again later
+  // the camera follows the scroll with inertia: the mouse wheel jumps in steps, the view eases to it (soft start and stop)
+  if (progS === null || state === 'run') progS = f.prog;
+  progS += (f.prog - progS) * (1 - Math.exp(-dt * 9));
+  if (Math.abs(f.prog - progS) < .0005) progS = f.prog;
+  if (state === 'idle' && progS >= .999) start();
+  if (state === 'run' && (f.prog < .6 || !f.any) && T > .5){ placeIdle(); progS = f.prog; } // scrolled back up / away: re-arm, plays again later
   if (!f.any){ renderer.setScissorTest(false); renderer.clear(); return; }
-  step(dt, f.prog); render();
+  step(dt, progS); render();
 });
 
 // test / debug hooks: seek(t) replays the timeline deterministically at 30 fps; idleAt(p) shows the scroll-driven pre-phase
