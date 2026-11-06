@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js';
 
 // ---------------------------------------------------------------- settings
 export const YELLOW = 0xffc800;   // car paint
@@ -14,6 +15,14 @@ export const PAL = {              // light "paper-model" palette
  * Builds the whole 3D world (map + car + fixed route + driving logic) into `scene`.
  * Returns {car, route, bounds, sun, update(dt, speed), ...}. No renderer / camera / UI in here.
  */
+let _gltf = null;
+function gltfLoader(){                                  // GLTF with Draco-compressed meshes (the car model is Draco-encoded)
+  if (!_gltf){
+    const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/');
+    _gltf = new GLTFLoader().setDRACOLoader(draco);
+  }
+  return _gltf;
+}
 export async function buildWorld({scene, data, carUrl = new URL('./models/car.glb', import.meta.url).href, routePre = [[446,-339],[434,-338]], shadowSize = 2048}){
 scene.add(new THREE.HemisphereLight(0xffffff, 0xdfe3e6, 1.5));
 const hemi = scene.children[scene.children.length - 1];
@@ -196,7 +205,7 @@ function rigWheels(m){
   return wheels;
 }
 async function loadCar(){
-  const gltf = await new GLTFLoader().loadAsync(carUrl);
+  const gltf = await gltfLoader().loadAsync(carUrl);
   const m = gltf.scene; m.updateMatrixWorld(true);
   m.traverse(o => { if (!o.isMesh) return;
     const hit = PAINT_GLB.find(([re]) => re.test(o.name));
